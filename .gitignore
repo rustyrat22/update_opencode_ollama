@@ -1,0 +1,8 @@
+# Editor / OS junk
+.DS_Store
+Thumbs.db
+*.swp
+
+# PowerShell / script cruft
+*.log
+*.tmp
