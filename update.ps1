@@ -353,6 +353,13 @@ else {
         New-Item -ItemType Directory -Path $configDir -Force | Out-Null
     }
 
+    # Back up any existing config before overwriting
+    if (Test-Path $configPath -PathType Leaf) {
+        $backupPath = "$configPath.bak"
+        Copy-Item -Path $configPath -Destination $backupPath -Force
+        Write-Host "  Backed up existing config to: $backupPath"
+    }
+
     $config | ConvertTo-Json -Depth 10 | Set-Content -Path $configPath -Encoding UTF8
     Write-Ok "Wrote config to: $configPath"
     Write-Host "  model:       $ollamaModelRef" -ForegroundColor White
