@@ -107,6 +107,43 @@ function Update-AllModels {
     return $summary
 }
 
+# Reads a model's generation settings via the Ollama API and returns a hashtable
+# of the settings that opencode can express (temperature, top_p, top_k, num_ctx).
+# Returns $null if they cannot be determined.
+function Get-ModelParameters {
+    param([string]$ModelName)
+
+    try {
+        $body = @{ model = $ModelName } | ConvertTo-Json
+        $api = Invoke-RestMethod -Uri "http://localhost:11434/api/show" -Method Post `
+            -Body $body -ContentType "application/json" -TimeoutSec 15
+
+        $params = @{}
+
+        if ($api.parameters) {
+            # Ollama may return parameters as "name value" lines
+            foreach ($line in ($api.parameters -split "`n")) {
+                if ($line -match "^\s*(\w+)\s+(.+)$") {
+                    $params[$Matches[1]] = $Matches[2]
+                }
+            }
+        }
+
+        # Fall back to the architecture's context length when num_ctx is not set
+        if (-not $params.ContainsKey("num_ctx")) {
+            $ctxKey = ($api.model_info.PSObject.Properties.Name | Where-Object { $_ -match "\.context_length$" } | Select-Object -First 1)
+            if ($ctxKey) {
+                $params["num_ctx"] = $api.model_info.$ctxKey
+            }
+        }
+
+        return $params
+    }
+    catch {
+        return $null
+    }
+}
+
 # ===========================================================================
 # Step 1: Update Ollama
 # ===========================================================================
@@ -308,6 +345,43 @@ $config | Add-Member -NotePropertyName "small_model" -NotePropertyValue $ollamaM
 # Ensure $schema is present
 if (-not ($config.PSObject.Properties.Name -contains '$schema')) {
     $config | Add-Member -NotePropertyName '$schema' -NotePropertyValue "https://opencode.ai/config.json" -Force
+}
+
+# Carry the model's runtime settings into the opencode config so requests to the
+# Ollama model use the same generation parameters as the installed model.
+$modelParams = Get-ModelParameters -ModelName $Model
+if ($modelParams -and $modelParams.Count -gt 0) {
+    # Build provider.ollama.models.<model>.options
+    $provider = if ($config.PSObject.Properties.Name -contains 'provider') { $config.provider } else { [PSCustomObject]@{} }
+    if (-not ($provider.PSObject.Properties.Name -contains 'ollama')) {
+        $provider | Add-Member -NotePropertyName "ollama" -NotePropertyValue ([PSCustomObject]@{}) -Force
+    }
+    $ollamaProv = $provider.ollama
+    if (-not ($ollamaProv.PSObject.Properties.Name -contains 'models')) {
+        $ollamaProv | Add-Member -NotePropertyName "models" -NotePropertyValue ([PSCustomObject]@{}) -Force
+    }
+    $ollamaModels = $ollamaProv.models
+    if (-not ($ollamaModels.PSObject.Properties.Name -contains $Model)) {
+        $ollamaModels | Add-Member -NotePropertyName $Model -NotePropertyValue ([PSCustomObject]@{}) -Force
+    }
+    $modelCfg = $ollamaModels.$Model
+    if (-not ($modelCfg.PSObject.Properties.Name -contains 'options')) {
+        $modelCfg | Add-Member -NotePropertyName "options" -NotePropertyValue ([PSCustomObject]@{}) -Force
+    }
+    $opt = $modelCfg.options
+
+    foreach ($k in $modelParams.Keys) {
+        $opt | Add-Member -NotePropertyName $k -NotePropertyValue $modelParams[$k] -Force
+    }
+
+    if (-not ($config.PSObject.Properties.Name -contains 'provider')) {
+        $config | Add-Member -NotePropertyName "provider" -NotePropertyValue $provider -Force
+    }
+
+    Write-Ok "Synced model parameters into config: $($modelParams.Keys -join ', ')"
+}
+else {
+    Write-Ok "No explicit model parameters to sync (using Ollama defaults)"
 }
 
 if ($DryRun) {
