@@ -9,6 +9,7 @@
       2. Detect the currently running model (ollama ps)
       3. Pull the latest version of that model (ollama pull)
       3b. Pull the latest version of ALL downloaded models (ollama pull for each)
+      3c. Reload the in-use model (ollama stop) so updated weights are picked up
       4. Update opencode (opencode upgrade)
       5. Create or merge ~/.config/opencode/opencode.json with the Ollama model
       6. Verify the update ran (verify-update.ps1)
@@ -234,6 +235,37 @@ else {
 Write-Step "3b" "Updating all downloaded models"
 $allSummary = Update-AllModels -WhatIf:$DryRun
 Write-Ok "Models updated: $($allSummary.Updated.Count); already current: $($allSummary.Current.Count)"
+
+# ===========================================================================
+# Step 3c: Reload the in-use model so fresh weights are picked up next load
+# ===========================================================================
+Write-Step "3c" "Reloading in-use model '$Model'"
+
+$psAfter = ollama ps 2>&1
+$psLinesAfter = ($psAfter -split "`n") | Where-Object { $_ -match "\S" }
+$running = $false
+if ($psLinesAfter.Count -ge 2) {
+    $running = ($psLinesAfter[1] -split "\s+")[0] -eq $Model
+}
+
+if ($DryRun) {
+    if ($running) {
+        Write-Warn "Dry run - would run: ollama stop $Model"
+    }
+    else {
+        Write-Ok "Model '$Model' is not loaded - nothing to stop"
+    }
+}
+else {
+    if ($running) {
+        Write-Host "  Running: ollama stop $Model"
+        ollama stop $Model
+        Write-Ok "Stopped '$Model' - it will reload with updated weights on next use"
+    }
+    else {
+        Write-Ok "Model '$Model' is not loaded - nothing to stop"
+    }
+}
 
 # ===========================================================================
 # Step 4: Update opencode
